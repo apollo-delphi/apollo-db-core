@@ -7,6 +7,7 @@ uses
   FireDAC.Comp.Client,
   FireDAC.DApt,
   FireDAC.FMXUI.Wait,
+  FireDAC.Phys.Intf,
   FireDAC.Stan.Async,
   FireDAC.Stan.Def,
   System.Classes;
@@ -20,21 +21,50 @@ type
   TFieldDef = record
   public
     FieldName: string;
+    FieldLength: Integer;
     NotNull: Boolean;
     OldFieldName: string;
     SQLType: string;
     procedure Init;
   end;
 
+  TFKeyDef = record
+  public
+    FieldName: string;
+    ReferenceFieldName: string;
+    ReferenceTableName: string;
+    function GetFKeyHash: string;
+  end;
+
+  TFKeyDefsHelper = record helper for TArray<TFKeyDef>
+    function TryGetFKeyDef(const aFieldName: string; out aFKeyDef: TFKeyDef): Boolean;
+  end;
+
+  TIndexDef = record
+    FieldNames: TArray<string>;
+    IndexName: string;
+  end;
+
+  TIndexDefsHelper = record helper for TArray<TIndexDef>
+    function Contains(const aFieldNames: TArray<string>): Boolean;
+  end;
+
   TTableDef = record
+  public
     FieldDefs: TArray<TFieldDef>;
+    FKeyDefs: TArray<TFKeyDef>;
+    IndexDefs: TArray<TIndexDef>;
+    OldTableName: string;
     PKey: TPKey;
     TableName: string;
+    procedure Init;
   end;
 
   TDBConnectParams = record
     DataBase: string;
   end;
+
+  THandleMetaDataProc = reference to procedure(aDMetaInfoQuery: TFDMetaInfoQuery);
 
   TDBEngine = class abstract
   private
@@ -44,12 +74,15 @@ type
     function Connected: Boolean;
   protected
     type
-      TMetaDiff = (mdEqual, mdNeedToAdd, mdNeedToModify, mdNeedToDelete);
-    function DifferMetadata(const aTableName: string; const aFieldDef: TFieldDef): TMetaDiff;
+      TMetaDiff = (mdEqual, mdNeedToAdd, mdNeedToModify);
+    function DifferMetadata(const aTableName: string; const aFieldDef: TFieldDef): TMetaDiff; overload;
+    function DifferMetadata(const aTableName: string; const aFKeyDef: TFKeyDef): TMetaDiff; overload;
+    procedure ForEachMetadata(const aObjectName: string; aMetaInfoKind: TFDPhysMetaInfoKind;
+      aHandleMetaDataProc: THandleMetaDataProc);
     procedure SetConnectParams(aConnection: TFDConnection); virtual;
   public
-    function GetCreateTableSQL(const aTableDef: TTableDef): string;
-    function GetModifyTableSQL(const aOldTableName: string; const aTableDef: TTableDef): TStringList; virtual;
+    function GetCreateTableSQL(const aTableDef: TTableDef): TStringList;
+    function GetModifyTableSQL(const aTableDef: TTableDef): TStringList; virtual;
     function TableExists(const aTableName: string): Boolean;
     procedure CloseConnection;
     procedure ExecQuery(aQuery: TFDQuery);
@@ -67,7 +100,7 @@ implementation
 
 uses
   Apollo_Helpers,
-  FireDAC.Phys.Intf,
+  FireDAC.Stan.Intf,
   System.SysUtils;
 
 { TDBEngine }
@@ -110,47 +143,75 @@ begin
   end;
 end;
 
-function TDBEngine.GetCreateTableSQL(const aTableDef: TTableDef): string;
+function TDBEngine.GetCreateTableSQL(const aTableDef: TTableDef): TStringList;
 var
   FieldDef: TFieldDef;
+  FKeyDef: TFKeyDef;
   i: Integer;
-  sAutoincrement: string;
+  IndexDef: TIndexDef;
   sField: string;
   sFields: string;
+  sLength: string;
   sNotNull: string;
+  sPKey: string;
+  TableDef: TTableDef;
 begin
+  Result := TStringList.Create;
+  TableDef := aTableDef;
   i := 0;
   sFields := '';
-  for FieldDef in aTableDef.FieldDefs do
+
+  for FieldDef in TableDef.FieldDefs do
   begin
+    sPKey := '';
+    sLength := '';
+    sNotNull := '';
+
     if i > 0 then
     sFields := sFields + ', ';
 
-    if FieldDef.NotNull then
-      sNotNull := ' NOT NULL'
-    else
-      sNotNull := '';
-
-    sField := Format('%s %s%s', [FieldDef.FieldName, FieldDef.SQLType, sNotNull]);
-
-    if aTableDef.PKey.FieldNames.Contains(FieldDef.FieldName) then
+    if TableDef.PKey.FieldNames.Contains(FieldDef.FieldName) and (TableDef.PKey.FieldNames.Count = 1) then
     begin
-      if aTableDef.PKey.Autoincrement then
-        sAutoincrement := ' AUTOINCREMENT'
-      else
-        sAutoincrement := '';
+      sPKey := ' PRIMARY KEY';
+      if TableDef.PKey.Autoincrement then
+        sPKey := sPKey +' AUTOINCREMENT';
+    end;
 
-      sField := sField + Format(' PRIMARY KEY%s NOT NULL UNIQUE', [sAutoincrement]);
+    if FieldDef.FieldLength > 0 then
+      sLength := Format('(%d)', [FieldDef.FieldLength]);
+
+    if FieldDef.NotNull then
+      sNotNull := ' NOT NULL';
+
+    sField := Format('`%s` %s%s%s%s', [FieldDef.FieldName, FieldDef.SQLType, sLength, sPKey, sNotNull]);
+
+    if TableDef.FKeyDefs.TryGetFKeyDef(FieldDef.FieldName, FKeyDef) then
+    begin
+      sField := sField + Format(' REFERENCES %s(%s)', [FKeyDef.ReferenceTableName, FKeyDef.ReferenceFieldName]);
+
+      if not TableDef.IndexDefs.Contains([FKeyDef.FieldName]) then
+      begin
+        IndexDef.IndexName := 'IDX_' + FKeyDef.GetFKeyHash;
+        IndexDef.FieldNames := [FKeyDef.FieldName];
+        TableDef.IndexDefs := TableDef.IndexDefs + [IndexDef];
+      end;
     end;
 
     sFields := sFields + sField;
     Inc(i);
   end;
 
-  Result := Format('CREATE TABLE %s (%s);', [aTableDef.TableName, sFields]);
+  sPKey := '';
+  if TableDef.PKey.FieldNames.Count > 1 then
+    sPKey := Format(', PRIMARY KEY(%s)', [TableDef.PKey.FieldNames.CommaText]);
+
+  Result.Add(Format('CREATE TABLE %s (%s%s);', [TableDef.TableName, sFields, sPKey]));
+
+  for IndexDef in TableDef.IndexDefs do
+    Result.Add(Format('CREATE INDEX %s ON %s(%s);', [IndexDef.IndexName, TableDef.TableName, IndexDef.FieldNames.CommaText]));
 end;
 
-function TDBEngine.GetModifyTableSQL(const aOldTableName: string; const aTableDef: TTableDef): TStringList;
+function TDBEngine.GetModifyTableSQL(const aTableDef: TTableDef): TStringList;
 begin
   Result := nil;
 end;
@@ -172,32 +233,116 @@ begin
   end;
 end;
 
-function TDBEngine.DifferMetadata(const aTableName: string; const aFieldDef: TFieldDef): TMetaDiff;
+procedure TDBEngine.ForEachMetadata(const aObjectName: string; aMetaInfoKind: TFDPhysMetaInfoKind;
+  aHandleMetaDataProc: THandleMetaDataProc);
 var
   FDMetaInfoQuery: TFDMetaInfoQuery;
 begin
-  Result := mdEqual;
-
   FDMetaInfoQuery := TFDMetaInfoQuery.Create(nil);
   try
     FDMetaInfoQuery.Connection := FFDConnection;
-    FDMetaInfoQuery.MetaInfoKind := mkTableFields;
-    FDMetaInfoQuery.ObjectName := aTableName;
+    FDMetaInfoQuery.MetaInfoKind := aMetaInfoKind;
+    case aMetaInfoKind of
+      mkForeignKeyFields:
+      begin
+        FDMetaInfoQuery.ObjectName := aObjectName.Split([';'])[0];
+        FDMetaInfoQuery.BaseObjectName := aObjectName.Split([';'])[1];
+      end
+    else
+      FDMetaInfoQuery.ObjectName := aObjectName;
+    end;
     FDMetaInfoQuery.Open;
 
     while not FDMetaInfoQuery.EOF do
     begin
-      if FDMetaInfoQuery.FieldByName('COLUMN_NAME').AsString = aFieldDef.OldFieldName then
-      begin
-        if aFieldDef.OldFieldName <> aFieldDef.FieldName then
-          Exit(mdNeedToModify);
-      end;
-
+      aHandleMetaDataProc(FDMetaInfoQuery);
       FDMetaInfoQuery.Next;
     end;
   finally
     FDMetaInfoQuery.Free;
   end;
+end;
+
+function TDBEngine.DifferMetadata(const aTableName: string; const aFieldDef: TFieldDef): TMetaDiff;
+var
+  FieldAttrs: TFDDataAttributes;
+  FieldExists: Boolean;
+  i: Integer;
+  MetaDiff: TMetaDiff;
+begin
+  MetaDiff := mdEqual;
+
+  FieldExists := False;
+
+  ForEachMetadata(aTableName, mkTableFields, procedure(aDMetaInfoQuery: TFDMetaInfoQuery)
+    begin
+      i := aDMetaInfoQuery.FieldByName('COLUMN_ATTRIBUTES').AsInteger;
+      FieldAttrs := TFDDataAttributes(Pointer(@i)^);
+
+      if aDMetaInfoQuery.FieldByName('COLUMN_NAME').AsString = aFieldDef.OldFieldName then
+      begin
+        if (aFieldDef.OldFieldName <> aFieldDef.FieldName) or
+           (aDMetaInfoQuery.FieldByName('COLUMN_TYPENAME').AsString <> aFieldDef.SQLType) or
+           (aDMetaInfoQuery.FieldByName('COLUMN_LENGTH').AsInteger <> aFieldDef.FieldLength) or
+           ((caAllowNull in FieldAttrs) = aFieldDef.NotNull)
+        then
+          MetaDiff := mdNeedToModify;
+      end;
+
+      if aDMetaInfoQuery.FieldByName('COLUMN_NAME').AsString = aFieldDef.FieldName then
+        FieldExists := True;
+    end
+  );
+
+  if MetaDiff <> mdEqual then
+    Exit(MetaDiff);
+
+
+  if not FieldExists then
+    Exit(mdNeedToAdd);
+
+  Result := MetaDiff;
+end;
+
+function TDBEngine.DifferMetadata(const aTableName: string; const aFKeyDef: TFKeyDef): TMetaDiff;
+var
+  FKFieldNameExists: Boolean;
+  FKRefFieldExists: Boolean;
+  FKRefTableExists: Boolean;
+  MetaDiff: TMetaDiff;
+begin
+  MetaDiff := mdNeedToModify;
+  FKRefTableExists := False;
+
+  ForEachMetadata(aTableName, mkForeignKeys, procedure(aDMetaInfoQuery: TFDMetaInfoQuery)
+    var
+      ObjectName: string;
+    begin
+      FKRefFieldExists := False;
+      FKFieldNameExists := False;
+
+      if aDMetaInfoQuery.FieldByName('PKEY_TABLE_NAME').AsString  = aFKeyDef.ReferenceTableName then
+      begin
+        FKRefTableExists := True;
+        ObjectName := string.Join(';', [aDMetaInfoQuery.FieldByName('FKEY_NAME').AsString, aTableName]);
+
+        ForEachMetadata(ObjectName, mkForeignKeyFields, procedure(aDMetaInfoQuery: TFDMetaInfoQuery)
+          begin
+            if aDMetaInfoQuery.FieldByName('PKEY_COLUMN_NAME').AsString  = aFKeyDef.ReferenceFieldName then
+              FKRefFieldExists := True;
+
+            if aDMetaInfoQuery.FieldByName('COLUMN_NAME').AsString  = aFKeyDef.FieldName then
+              FKFieldNameExists := True;
+          end
+        );
+      end;
+
+      if FKRefTableExists and FKRefFieldExists and FKFieldNameExists then
+        MetaDiff := mdEqual;
+    end
+  );
+
+  Result := MetaDiff;
 end;
 
 function TDBEngine.Connected: Boolean;
@@ -260,9 +405,72 @@ end;
 procedure TFieldDef.Init;
 begin
   FieldName := '';
+  FieldLength := 0;
   NotNull := False;
   OldFieldName := '';
   SQLType := '';
+end;
+
+{ TTableDef }
+
+procedure TTableDef.Init;
+begin
+  FieldDefs := [];
+  FKeyDefs := [];
+  IndexDefs := [];
+  OldTableName := '';
+  PKey.Autoincrement := False;
+  PKey.FieldNames := [];
+  TableName := '';
+end;
+
+{TFKeyDefsHelper}
+
+function TFKeyDefsHelper.TryGetFKeyDef(const aFieldName: string; out aFKeyDef: TFKeyDef): Boolean;
+var
+  FKeyDef: TFKeyDef;
+begin
+  Result := False;
+
+  for FKeyDef in Self do
+    if FKeyDef.FieldName = aFieldName then
+    begin
+      aFKeyDef := FKeyDef;
+      Exit(True);
+    end;
+end;
+
+{TIndexDefsHelper}
+
+function TIndexDefsHelper.Contains(const aFieldNames: TArray<string>): Boolean;
+var
+  FieldName: string;
+  FieldNamesTheSame: Boolean;
+  IndexDef: TIndexDef;
+begin
+  Result := False;
+
+  for IndexDef in Self do
+    if (IndexDef.FieldNames.Count = aFieldNames.Count) then
+    begin
+      FieldNamesTheSame := True;
+      for FieldName in aFieldNames do
+        if not IndexDef.FieldNames.Contains(FieldName) then
+        begin
+          FieldNamesTheSame := False;
+          Break;
+        end;
+
+      if FieldNamesTheSame then
+        Exit(True);
+    end;
+end;
+
+{TFKeyDef}
+
+function TFKeyDef.GetFKeyHash: string;
+begin
+  Result := TStringTools.GetHash16(FieldName + ReferenceFieldName + ReferenceTableName);
 end;
 
 end.
