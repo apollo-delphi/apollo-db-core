@@ -9,7 +9,7 @@ uses
   DUnitX.TestFramework,
   tstApollo_DB_Core in 'tstApollo_DB_Core.pas',
   Apollo_DB_Core in 'Apollo_DB_Core.pas',
-  Apollo_Helpers in '..\Vendors\Apollo_Helpers\Apollo_Helpers.pas';
+  Apollo_Helpers in '..\Vendors\Apollo_Helpers\Source\Apollo_Helpers.pas';
 
 begin
   Application.Initialize;
