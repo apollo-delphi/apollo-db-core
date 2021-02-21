@@ -6,7 +6,6 @@ uses
   Data.DB,
   FireDAC.Comp.Client,
   FireDAC.DApt,
-  FireDAC.FMXUI.Wait,
   FireDAC.Phys.Intf,
   FireDAC.Stan.Async,
   FireDAC.Stan.Def,
