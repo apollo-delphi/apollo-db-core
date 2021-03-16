@@ -81,6 +81,7 @@ type
     procedure SetConnectParams(aConnection: TFDConnection); virtual;
   public
     function GetCreateTableSQL(const aTableDef: TTableDef): TStringList;
+    function GetLastInsertedID: Integer;
     function GetModifyTableSQL(const aTableDef: TTableDef): TStringList; virtual;
     function TableExists(const aTableName: string): Boolean;
     procedure CloseConnection;
@@ -103,6 +104,11 @@ uses
   System.SysUtils;
 
 { TDBEngine }
+
+function TDBEngine.GetLastInsertedID: Integer;
+begin
+  Result := FFDConnection.GetLastAutoGenValue('');
+end;
 
 procedure TDBEngine.CloseConnection;
 begin
