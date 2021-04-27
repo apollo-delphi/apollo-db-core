@@ -32,6 +32,7 @@ type
     FieldName: string;
     ReferenceFieldName: string;
     ReferenceTableName: string;
+    TableName: string;
     function GetFKeyHash: string;
   end;
 
@@ -475,7 +476,7 @@ end;
 
 function TFKeyDef.GetFKeyHash: string;
 begin
-  Result := TStringTools.GetHash16(FieldName + ReferenceFieldName + ReferenceTableName);
+  Result := TStringTools.GetHash16(TableName + FieldName + ReferenceFieldName + ReferenceTableName);
 end;
 
 end.
