@@ -87,6 +87,8 @@ type
     function GetModifyTableSQL(const aTableDef: TTableDef): TStringList; virtual;
     function TableExists(const aTableName: string): Boolean;
     procedure CloseConnection;
+    procedure DisableForeignKeys; virtual; abstract;
+    procedure EnableForeignKeys; virtual; abstract;
     procedure ExecQuery(aQuery: TFDQuery);
     procedure ExecSQL(const aSQLString: string);
     procedure OpenConnection;
