@@ -1,4 +1,3 @@
-//for testing 14 july 2021 10:37
 unit Apollo_DB_Core;
 
 interface
@@ -18,6 +17,18 @@ type
     FieldNames: TArray<string>;
   end;
 
+  TIndexDef = record
+  public
+    FieldNames: TArray<string>;
+    IndexName: string;
+    Unique: Boolean;
+    procedure Init;
+  end;
+
+  TIndexDefsHelper = record helper for TArray<TIndexDef>
+    function Contains(const aFieldNames: TArray<string>): Boolean;
+  end;
+
   TFieldDef = record
   public
     FieldName: string;
@@ -35,19 +46,11 @@ type
     ReferenceTableName: string;
     TableName: string;
     function GetFKeyHash: string;
+    function GetIndexDef: TIndexDef;
   end;
 
   TFKeyDefsHelper = record helper for TArray<TFKeyDef>
     function TryGetFKeyDef(const aFieldName: string; out aFKeyDef: TFKeyDef): Boolean;
-  end;
-
-  TIndexDef = record
-    FieldNames: TArray<string>;
-    IndexName: string;
-  end;
-
-  TIndexDefsHelper = record helper for TArray<TIndexDef>
-    function Contains(const aFieldNames: TArray<string>): Boolean;
   end;
 
   TTableDef = record
@@ -78,6 +81,10 @@ type
       TMetaDiff = (mdEqual, mdNeedToAdd, mdNeedToModify);
     function DifferMetadata(const aTableName: string; const aFieldDef: TFieldDef): TMetaDiff; overload;
     function DifferMetadata(const aTableName: string; const aFKeyDef: TFKeyDef): TMetaDiff; overload;
+    function DifferMetadata(const aTableName: string; const aIndexDef: TIndexDef): TMetaDiff; overload;
+    function DifferMetadataForDrop(const aTableName: string; const aFieldDefs: TArray<TFieldDef>): TArray<string>; overload;
+    function DifferMetadataForDrop(const aTableName: string; const aFKeyDefs: TArray<TFKeyDef>): TArray<string>; overload;
+    function DifferMetadataForDrop(const aTableName: string; const aIndexDefs: TArray<TIndexDef>): TArray<string>; overload;
     procedure ForEachMetadata(const aObjectName: string; aMetaInfoKind: TFDPhysMetaInfoKind;
       aHandleMetaDataProc: THandleMetaDataProc);
     procedure SetConnectParams(aConnection: TFDConnection); virtual;
@@ -163,6 +170,7 @@ var
   sLength: string;
   sNotNull: string;
   sPKey: string;
+  sUnique: string;
   TableDef: TTableDef;
 begin
   Result := TStringList.Create;
@@ -194,16 +202,12 @@ begin
 
     sField := Format('`%s` %s%s%s%s', [FieldDef.FieldName, FieldDef.SQLType, sLength, sPKey, sNotNull]);
 
-    if TableDef.FKeyDefs.TryGetFKeyDef(FieldDef.FieldName, FKeyDef) then
+    if TableDef.FKeyDefs.TryGetFKeyDef(FieldDef.FieldName, {out}FKeyDef) then
     begin
       sField := sField + Format(' REFERENCES %s(%s)', [FKeyDef.ReferenceTableName, FKeyDef.ReferenceFieldName]);
 
       if not TableDef.IndexDefs.Contains([FKeyDef.FieldName]) then
-      begin
-        IndexDef.IndexName := 'IDX_' + FKeyDef.GetFKeyHash;
-        IndexDef.FieldNames := [FKeyDef.FieldName];
-        TableDef.IndexDefs := TableDef.IndexDefs + [IndexDef];
-      end;
+        TableDef.IndexDefs := TableDef.IndexDefs + [FKeyDef.GetIndexDef];
     end;
 
     sFields := sFields + sField;
@@ -217,7 +221,15 @@ begin
   Result.Add(Format('CREATE TABLE %s (%s%s);', [TableDef.TableName, sFields, sPKey]));
 
   for IndexDef in TableDef.IndexDefs do
-    Result.Add(Format('CREATE INDEX %s ON %s(%s);', [IndexDef.IndexName, TableDef.TableName, IndexDef.FieldNames.CommaText]));
+  begin
+    if IndexDef.Unique then
+      sUnique := 'UNIQUE '
+    else
+      sUnique := '';
+
+    Result.Add(Format('CREATE %sINDEX %s ON %s(%s);', [sUnique, IndexDef.IndexName,
+      TableDef.TableName, IndexDef.FieldNames.CommaText]));
+  end;
 end;
 
 function TDBEngine.GetModifyTableSQL(const aTableDef: TTableDef): TStringList;
@@ -252,11 +264,11 @@ begin
     FDMetaInfoQuery.Connection := FFDConnection;
     FDMetaInfoQuery.MetaInfoKind := aMetaInfoKind;
     case aMetaInfoKind of
-      mkForeignKeyFields:
+      mkForeignKeyFields, mkIndexFields:
       begin
         FDMetaInfoQuery.ObjectName := aObjectName.Split([';'])[0];
         FDMetaInfoQuery.BaseObjectName := aObjectName.Split([';'])[1];
-      end
+      end;
     else
       FDMetaInfoQuery.ObjectName := aObjectName;
     end;
@@ -306,7 +318,6 @@ begin
   if MetaDiff <> mdEqual then
     Exit(MetaDiff);
 
-
   if not FieldExists then
     Exit(mdNeedToAdd);
 
@@ -352,6 +363,145 @@ begin
   );
 
   Result := MetaDiff;
+end;
+
+function TDBEngine.DifferMetadata(const aTableName: string; const aIndexDef: TIndexDef): TMetaDiff;
+var
+  IndexFieldExists: Boolean;
+begin
+  Result := mdNeedToModify;
+  IndexFieldExists := False;
+
+  ForEachMetadata(aTableName, mkIndexes, procedure(aDMetaInfoQuery: TFDMetaInfoQuery)
+    var
+      ObjectName: string;
+      IsUnique: Boolean;
+    begin
+      ObjectName := string.Join(';', [aDMetaInfoQuery.FieldByName('INDEX_NAME').AsString, aTableName]);
+      IsUnique := aDMetaInfoQuery.FieldByName('INDEX_TYPE').AsInteger = Ord(ikUnique);
+
+      ForEachMetadata(ObjectName, mkIndexFields, procedure(aDMetaInfoQuery: TFDMetaInfoQuery)
+        begin
+          if (aDMetaInfoQuery.FieldByName('COLUMN_NAME').AsString = aIndexDef.FieldNames[0]) and
+             (IsUnique = aIndexDef.Unique)
+          then
+            IndexFieldExists := True;
+        end
+      );
+    end
+  );
+
+  if IndexFieldExists then
+    Result := mdEqual;
+end;
+
+function TDBEngine.DifferMetadataForDrop(const aTableName: string; const aFieldDefs: TArray<TFieldDef>): TArray<string>;
+var
+  FieldsToDrop: TArray<string>;
+begin
+  FieldsToDrop := [];
+
+  ForEachMetadata(aTableName, mkTableFields, procedure(aDMetaInfoQuery: TFDMetaInfoQuery)
+    var
+      FieldDef: TFieldDef;
+      FieldInDef: Boolean;
+      FieldName: string;
+    begin
+      FieldInDef := False;
+      FieldName := aDMetaInfoQuery.FieldByName('COLUMN_NAME').AsString;
+
+      for FieldDef in aFieldDefs do
+        if FieldName = FieldDef.OldFieldName then
+        begin
+          FieldInDef := True;
+          Break;
+        end;
+
+      if not FieldInDef then
+        FieldsToDrop := FieldsToDrop + [FieldName];
+    end
+  );
+
+  Result := FieldsToDrop;
+end;
+
+function TDBEngine.DifferMetadataForDrop(const aTableName: string; const aFKeyDefs: TArray<TFKeyDef>): TArray<string>;
+var
+  FKeysToDrop: TArray<string>;
+begin
+  FKeysToDrop := [];
+
+  ForEachMetadata(aTableName, mkForeignKeys, procedure(aDMetaInfoQuery: TFDMetaInfoQuery)
+    var
+      FKeyName: string;
+      FKTableName: string;
+      ObjectName: string;
+    begin
+      FKTableName := aDMetaInfoQuery.FieldByName('PKEY_TABLE_NAME').AsString;
+      FKeyName := aDMetaInfoQuery.FieldByName('FKEY_NAME').AsString;
+      ObjectName := string.Join(';', [FKeyName, aTableName]);
+
+      ForEachMetadata(ObjectName, mkForeignKeyFields, procedure(aDMetaInfoQuery: TFDMetaInfoQuery)
+        var
+          FKeyDef: TFKeyDef;
+          FKeyInDef: Boolean;
+        begin
+          FKeyInDef := False;
+
+          for FKeyDef in aFKeyDefs do
+            if (FKeyDef.ReferenceTableName = FKTableName) and
+               (FKeyDef.ReferenceFieldName = aDMetaInfoQuery.FieldByName('PKEY_COLUMN_NAME').AsString) and
+               (FKeyDef.FieldName = aDMetaInfoQuery.FieldByName('COLUMN_NAME').AsString)
+            then
+            begin
+              FKeyInDef := True;
+              Break;
+            end;
+
+          if not FKeyInDef then
+            FKeysToDrop := FKeysToDrop + [FKeyName];
+        end
+      );
+    end
+  );
+
+  Result := FKeysToDrop;
+end;
+
+function TDBEngine.DifferMetadataForDrop(const aTableName: string; const aIndexDefs: TArray<TIndexDef>): TArray<string>;
+var
+  IndexesToDrop: TArray<string>;
+begin
+  IndexesToDrop := [];
+
+  ForEachMetadata(aTableName, mkIndexes, procedure(aDMetaInfoQuery: TFDMetaInfoQuery)
+    var
+      ObjectName: string;
+    begin
+      ObjectName := string.Join(';', [aDMetaInfoQuery.FieldByName('INDEX_NAME').AsString, aTableName]);
+
+      ForEachMetadata(ObjectName, mkIndexFields, procedure(aDMetaInfoQuery: TFDMetaInfoQuery)
+        var
+          IndexDef: TIndexDef;
+          IndexInDef: Boolean;
+        begin
+          IndexInDef := False;
+
+          for IndexDef in aIndexDefs do
+            if IndexDef.FieldNames[0] = aDMetaInfoQuery.FieldByName('COLUMN_NAME').AsString then
+            begin
+              IndexInDef := True;
+              Break;
+            end;
+
+          if not IndexInDef then
+            IndexesToDrop := IndexesToDrop + [aDMetaInfoQuery.FieldByName('INDEX_NAME').AsString];
+        end
+      );
+    end
+  );
+
+  Result := IndexesToDrop;
 end;
 
 function TDBEngine.Connected: Boolean;
@@ -433,7 +583,7 @@ begin
   TableName := '';
 end;
 
-{TFKeyDefsHelper}
+{ TFKeyDefsHelper }
 
 function TFKeyDefsHelper.TryGetFKeyDef(const aFieldName: string; out aFKeyDef: TFKeyDef): Boolean;
 var
@@ -449,7 +599,7 @@ begin
     end;
 end;
 
-{TIndexDefsHelper}
+{ TIndexDefsHelper }
 
 function TIndexDefsHelper.Contains(const aFieldNames: TArray<string>): Boolean;
 var
@@ -475,11 +625,27 @@ begin
     end;
 end;
 
-{TFKeyDef}
+{ TFKeyDef }
 
 function TFKeyDef.GetFKeyHash: string;
 begin
   Result := TStringTools.GetHash16(TableName + FieldName + ReferenceFieldName + ReferenceTableName);
+end;
+
+function TFKeyDef.GetIndexDef: TIndexDef;
+begin
+  Result.Init;
+  Result.IndexName := 'IDX_' + GetFKeyHash;
+  Result.FieldNames := [FieldName];
+end;
+
+{ TIndexDef }
+
+procedure TIndexDef.Init;
+begin
+  FieldNames := [];
+  IndexName := '';
+  Unique := False;
 end;
 
 end.
