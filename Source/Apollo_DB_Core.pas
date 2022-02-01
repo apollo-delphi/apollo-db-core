@@ -31,8 +31,10 @@ type
 
   TFieldDef = record
   public
+    FieldLength: Integer; //Character and byte string column length.
     FieldName: string;
-    FieldLength: Integer;
+    FieldPrecision: Integer; //Numeric and date/time column precision
+    FieldScale: Integer; //Numeric and date/time column scale.
     NotNull: Boolean;
     OldFieldName: string;
     SQLType: string;
@@ -195,7 +197,10 @@ begin
     end;
 
     if FieldDef.FieldLength > 0 then
-      sLength := Format('(%d)', [FieldDef.FieldLength]);
+      sLength := Format('(%d)', [FieldDef.FieldLength])
+    else
+    if FieldDef.FieldPrecision > 0 then
+      sLength := Format('(%d,%d)', [FieldDef.FieldPrecision, FieldDef.FieldScale]);
 
     if FieldDef.NotNull then
       sNotNull := ' NOT NULL';
@@ -204,7 +209,7 @@ begin
 
     if TableDef.FKeyDefs.TryGetFKeyDef(FieldDef.FieldName, {out}FKeyDef) then
     begin
-      sField := sField + Format(' REFERENCES %s(%s)', [FKeyDef.ReferenceTableName, FKeyDef.ReferenceFieldName]);
+      sField := sField + Format(' REFERENCES `%s`(%s)', [FKeyDef.ReferenceTableName, FKeyDef.ReferenceFieldName]);
 
       if not TableDef.IndexDefs.Contains([FKeyDef.FieldName]) then
         TableDef.IndexDefs := TableDef.IndexDefs + [FKeyDef.GetIndexDef];
@@ -218,7 +223,7 @@ begin
   if TableDef.PKey.FieldNames.Count > 1 then
     sPKey := Format(', PRIMARY KEY(%s)', [TableDef.PKey.FieldNames.CommaText]);
 
-  Result.Add(Format('CREATE TABLE %s (%s%s);', [TableDef.TableName, sFields, sPKey]));
+  Result.Add(Format('CREATE TABLE `%s` (%s%s);', [TableDef.TableName, sFields, sPKey]));
 
   for IndexDef in TableDef.IndexDefs do
   begin
@@ -227,7 +232,7 @@ begin
     else
       sUnique := '';
 
-    Result.Add(Format('CREATE %sINDEX %s ON %s(%s);', [sUnique, IndexDef.IndexName,
+    Result.Add(Format('CREATE %sINDEX %s ON `%s`(%s);', [sUnique, IndexDef.IndexName,
       TableDef.TableName, IndexDef.FieldNames.CommaText]));
   end;
 end;
@@ -304,6 +309,8 @@ begin
       begin
         if (aFieldDef.OldFieldName <> aFieldDef.FieldName) or
            (aDMetaInfoQuery.FieldByName('COLUMN_TYPENAME').AsString <> aFieldDef.SQLType) or
+           (aDMetaInfoQuery.FieldByName('COLUMN_PRECISION').AsInteger <> aFieldDef.FieldPrecision) or
+           (aDMetaInfoQuery.FieldByName('COLUMN_SCALE').AsInteger <> aFieldDef.FieldScale) or
            (aDMetaInfoQuery.FieldByName('COLUMN_LENGTH').AsInteger <> aFieldDef.FieldLength) or
            ((caAllowNull in FieldAttrs) = aFieldDef.NotNull)
         then
@@ -409,14 +416,12 @@ begin
     begin
       FieldInDef := False;
       FieldName := aDMetaInfoQuery.FieldByName('COLUMN_NAME').AsString;
-
       for FieldDef in aFieldDefs do
         if FieldName = FieldDef.OldFieldName then
         begin
           FieldInDef := True;
           Break;
         end;
-
       if not FieldInDef then
         FieldsToDrop := FieldsToDrop + [FieldName];
     end
@@ -565,6 +570,8 @@ procedure TFieldDef.Init;
 begin
   FieldName := '';
   FieldLength := 0;
+  FieldPrecision := 0;
+  FieldScale := 0;
   NotNull := False;
   OldFieldName := '';
   SQLType := '';

@@ -15,6 +15,30 @@ type
     property Query: TFDQuery read GetQuery;
   end;
 
+  TOrderDirection = (odASC, odDESC);
+  TOrderItem = record
+  public
+    Alias: string;
+    Direction: TOrderDirection;
+    FieldName: string;
+    procedure Init;
+    procedure ReplaceAndReverse(const aFieldName: string);
+    constructor Create(const aFieldName: string; aDirection: TOrderDirection; const aAlias: string = '');
+  end;
+
+  POrder = ^TOrder;
+  TOrder = record
+  private
+    FOrderItems: TArray<TOrderItem>;
+  public
+    class function New: TOrder; overload; static;
+    class function New(aOrderItem: TOrderItem): TOrder; overload; static;
+    function Add(const aFieldName: string): POrder;
+    function AddDESC(const aFieldName: string): POrder;
+    function Count: Integer;
+    property OrderItems: TArray<TOrderItem> read FOrderItems;
+  end;
+
   TFilterMode = (fmUnknown, fmGetAll, fmGetWhere);
 
   TFilter = record
@@ -25,36 +49,17 @@ type
     procedure Init;
   public
     class function GetAll: TFilter; static;
+    class function GetUnknown: TFilter; static;
     class function GetWhere(const aWhereString: string;
       const aParamValues: TArray<Variant>): TFilter; static;
+    function BuildSQL(const aTableName: string; aOrder: POrder): string;
+    procedure FillParams(aQuery: TFDQuery);
     property FilterMode: TFilterMode read FFilterMode;
     property ParamValues: TArray<Variant> read FParamValues;
     property WhereString: string read FWhereString;
   end;
 
-  TOrderDirection = (odASC, odDESC);
-  TOrderItem = record
-  public
-    Alias: string;
-    Direction: TOrderDirection;
-    FieldName: string;
-    procedure Init;
-    procedure ReplaceAndReverse(const aFieldName: string);
-  end;
-
-  POrder = ^TOrder;
-  TOrder = record
-  private
-    FOrderItems: TArray<TOrderItem>;
-  public
-    class function New: TOrder; static;
-    function Add(const aFieldName: string): POrder;
-    function AddDESC(const aFieldName: string): POrder;
-    function Count: Integer;
-    property OrderItems: TArray<TOrderItem> read FOrderItems;
-  end;
-
-  T≈quality = (eEquals, eContains);
+  T≈quality = (eEquals, eNotEquals, eContains);
 
   IQueryBuilder = interface
   ['{13906095-D94C-4F81-A73E-6EC6C001DA0F}']
@@ -66,16 +71,20 @@ type
     function AddLeftJoin(const aTableName, aTableAlias, aTableFieldName, aReferAlias,
       aReferFieldName: string): IQueryBuilder;
     function AddOrderBy(const aOrderItem: TOrderItem): IQueryBuilder;
+    function AddOrWhere(const aAlias, aFieldName: string; const a≈quality: T≈quality;
+      const aParamName: string): IQueryBuilder;
     function AddSelect(const aAlias, aFieldName: string): IQueryBuilder;
     function AddSelectCount(const aAlias, aFieldName, aAsFieldName: string): IQueryBuilder;
     function BuildSQL: string;
     function FromTable(const aTableName, aAlias: string): IQueryBuilder;
     function GetLimit: Integer;
+    function GetOffset: Integer;
     function SetLimit(const aValue: Integer): IQueryBuilder;
     function SetOffset(const aValue: Integer): IQueryBuilder;
     function SetParam(const aParamName: string; const aValue: Variant): IQueryBuilder;
     procedure FillParams(aQuery: TFDQuery);
     property Limit: Integer read GetLimit;
+    property Offset: Integer read GetOffset;
   end;
 
 function MakeQueryKeeper: IQueryKeeper; overload;
@@ -89,6 +98,7 @@ uses
   Data.DB,
   FireDAC.Stan.ExprFuncs,
   FireDAC.Stan.Param,
+  System.Classes,
   System.SysUtils,
   System.Variants;
 
@@ -104,10 +114,13 @@ type
   end;
 
   TWhereItem = record
+    Alias: string;
     FieldName: string;
     Logic—lause: string;
     ParamName: string;
     ≈quality: T≈quality;
+    constructor Create(const aAlias, aFieldName: string; const a≈quality: T≈quality;
+      const aParamName: string; const aLogic—lause: string);
   end;
 
   TJoinItem = record
@@ -152,11 +165,14 @@ type
     function AddLeftJoin(const aTableName, aTableAlias, aTableFieldName, aReferAlias,
       aReferFieldName: string): IQueryBuilder;
     function AddOrderBy(const aOrderItem: TOrderItem): IQueryBuilder;
+    function AddOrWhere(const aAlias, aFieldName: string; const a≈quality: T≈quality;
+      const aParamName: string): IQueryBuilder;
     function AddSelect(const aAlias, aFieldName: string): IQueryBuilder;
     function AddSelectCount(const aAlias, aFieldName, aAsFieldName: string): IQueryBuilder;
     function BuildSQL: string;
     function FromTable(const aTableName, aAlias: string): IQueryBuilder;
     function GetLimit: Integer;
+    function GetOffset: Integer;
     function GetOrder: TOrder;
     function SetLimit(const aValue: Integer): IQueryBuilder;
     function SetOffset(const aValue: Integer): IQueryBuilder;
@@ -183,10 +199,63 @@ end;
 
 { TFilter }
 
+function TFilter.BuildSQL(const aTableName: string; aOrder: POrder): string;
+var
+  FromPart: string;
+  i: Integer;
+  OrderItem: TOrderItem;
+  OrderPart: string;
+  WherePart: string;
+begin
+  FromPart := Format('%s T', [aTableName]);
+  WherePart := '';
+  OrderPart := '';
+
+  case FilterMode of
+    fmUnknown: Exit('');
+    fmGetAll: WherePart := '';
+    fmGetWhere: WherePart := ' WHERE ' + WhereString;
+  end;
+
+  if Assigned(aOrder) and (Length(aOrder.OrderItems) > 0) then
+  begin
+    OrderPart := ' ORDER BY';
+    for i := Low(aOrder.OrderItems) to High(aOrder.OrderItems) do
+    begin
+      if i > 0 then
+        OrderPart := OrderPart + ',';
+      OrderItem := aOrder.OrderItems[i];
+      OrderPart := OrderPart + Format(' `%s`', [OrderItem.FieldName]);
+      if OrderItem.Direction = odDESC then
+        OrderPart := OrderPart + ' DESC';
+    end;
+  end;
+
+  Result := 'SELECT * FROM %s%s%s';
+  Result := Format(Result, [FromPart, WherePart, OrderPart]).Trim;
+end;
+
+procedure TFilter.FillParams(aQuery: TFDQuery);
+var
+  i: Integer;
+begin
+  if Length(ParamValues) <> aQuery.Params.Count then
+    raise Exception.Create('TFilter.FillParams: wrong params count.');
+
+  for i := 0 to aQuery.Params.Count - 1 do
+    aQuery.Params.Items[i].Value := ParamValues[i];
+end;
+
 class function TFilter.GetAll: TFilter;
 begin
   Result.Init;
   Result.FFilterMode := fmGetAll;
+end;
+
+class function TFilter.GetUnknown: TFilter;
+begin
+  Result.Init;
+  Result.FFilterMode := fmUnknown;
 end;
 
 class function TFilter.GetWhere(const aWhereString: string; const aParamValues: TArray<Variant>): TFilter;
@@ -229,6 +298,22 @@ end;
 function TOrder.Count: Integer;
 begin
   Result := Length(FOrderItems);
+end;
+
+class function TOrder.New(aOrderItem: TOrderItem): TOrder;
+var
+  Order: TOrder;
+  Words: TArray<string>;
+begin
+  if aOrderItem.FieldName.Contains('.') then
+  begin
+    Words := aOrderItem.FieldName.Split(['.']);
+    aOrderItem.Alias := Words[0];
+    aOrderItem.FieldName := Words[1];
+  end;
+
+  Order.FOrderItems := [aOrderItem];
+  Result := Order;
 end;
 
 class function TOrder.New: TOrder;
@@ -450,6 +535,11 @@ begin
   Result := FLimit;
 end;
 
+function TQueryBuilder.GetOffset: Integer;
+begin
+  Result := FOffset;
+end;
+
 function TQueryBuilder.GetOrder: TOrder;
 begin
   Result := FOrder;
@@ -514,10 +604,7 @@ function TQueryBuilder.AddAndWhere(const aAlias, aFieldName: string;
 var
   WhereItem: TWhereItem;
 begin
-  WhereItem.FieldName := aFieldName;
-  WhereItem.Logic—lause := 'AND';
-  WhereItem.≈quality := a≈quality;
-  WhereItem.ParamName := aParamName;
+  WhereItem := TWhereItem.Create(aAlias, aFieldName, a≈quality, aParamName, 'AND');
   FWhereItems := FWhereItems + [WhereItem];
 
   Result := Self;
@@ -540,6 +627,17 @@ end;
 function TQueryBuilder.AddOrderBy(const aOrderItem: TOrderItem): IQueryBuilder;
 begin
   FOrder.FOrderItems := FOrder.FOrderItems + [aOrderItem];
+
+  Result := Self;
+end;
+
+function TQueryBuilder.AddOrWhere(const aAlias, aFieldName: string;
+  const a≈quality: T≈quality; const aParamName: string): IQueryBuilder;
+var
+  WhereItem: TWhereItem;
+begin
+  WhereItem := TWhereItem.Create(aAlias, aFieldName, a≈quality, aParamName, 'OR');
+  FWhereItems := FWhereItems + [WhereItem];
 
   Result := Self;
 end;
@@ -581,6 +679,15 @@ end;
 
 { TOrderItem }
 
+constructor TOrderItem.Create(const aFieldName: string;
+  aDirection: TOrderDirection; const aAlias: string);
+begin
+  Init;
+  Alias := aAlias;
+  FieldName := aFieldName;
+  Direction := aDirection;
+end;
+
 procedure TOrderItem.Init;
 begin
   Alias := '';
@@ -602,6 +709,18 @@ begin
     Direction := odDESC
   else
     Direction := odASC;
+end;
+
+{ TWhereItem }
+
+constructor TWhereItem.Create(const aAlias, aFieldName: string;
+  const a≈quality: T≈quality; const aParamName, aLogic—lause: string);
+begin
+  Alias := aAlias;
+  FieldName := aFieldName;
+  ≈quality := a≈quality;
+  ParamName := aParamName;
+  Logic—lause := aLogic—lause;
 end;
 
 end.
