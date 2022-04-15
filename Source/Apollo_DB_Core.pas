@@ -31,6 +31,7 @@ type
 
   TFieldDef = record
   public
+    DefaultValue: Variant;
     FieldLength: Integer; //Character and byte string column length.
     FieldName: string;
     FieldPrecision: Integer; //Numeric and date/time column precision
@@ -114,7 +115,8 @@ implementation
 uses
   Apollo_Helpers,
   FireDAC.Stan.Intf,
-  System.SysUtils;
+  System.SysUtils,
+  System.Variants;
 
 { TDBEngine }
 
@@ -167,6 +169,7 @@ var
   FKeyDef: TFKeyDef;
   i: Integer;
   IndexDef: TIndexDef;
+  sDefault: string;
   sField: string;
   sFields: string;
   sLength: string;
@@ -185,6 +188,7 @@ begin
     sPKey := '';
     sLength := '';
     sNotNull := '';
+    sDefault := '';
 
     if i > 0 then
     sFields := sFields + ', ';
@@ -205,7 +209,10 @@ begin
     if FieldDef.NotNull then
       sNotNull := ' NOT NULL';
 
-    sField := Format('`%s` %s%s%s%s', [FieldDef.FieldName, FieldDef.SQLType, sLength, sPKey, sNotNull]);
+    if FieldDef.DefaultValue <> Null then
+      sDefault := Format(' DEFAULT ( ''%s'')', [VarToStr(FieldDef.DefaultValue)]);
+
+    sField := Format('`%s` %s%s%s%s%s', [FieldDef.FieldName, FieldDef.SQLType, sLength, sPKey, sNotNull, sDefault]);
 
     if TableDef.FKeyDefs.TryGetFKeyDef(FieldDef.FieldName, {out}FKeyDef) then
     begin
@@ -312,7 +319,8 @@ begin
            (aDMetaInfoQuery.FieldByName('COLUMN_PRECISION').AsInteger <> aFieldDef.FieldPrecision) or
            (aDMetaInfoQuery.FieldByName('COLUMN_SCALE').AsInteger <> aFieldDef.FieldScale) or
            (aDMetaInfoQuery.FieldByName('COLUMN_LENGTH').AsInteger <> aFieldDef.FieldLength) or
-           ((caAllowNull in FieldAttrs) = aFieldDef.NotNull)
+           ((caAllowNull in FieldAttrs) = aFieldDef.NotNull) or
+           ((caDefault in FieldAttrs) <> (aFieldDef.DefaultValue <> Null))
         then
           MetaDiff := mdNeedToModify;
       end;
@@ -575,6 +583,7 @@ begin
   NotNull := False;
   OldFieldName := '';
   SQLType := '';
+  DefaultValue := Null;
 end;
 
 { TTableDef }
