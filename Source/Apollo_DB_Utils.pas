@@ -73,7 +73,7 @@ type
     function AddOrderBy(const aOrderItem: TOrderItem): IQueryBuilder;
     function AddOrWhere(const aAlias, aFieldName: string; const a흎uality: T흎uality;
       const aParamName: string): IQueryBuilder;
-    function AddSelect(const aAlias, aFieldName: string): IQueryBuilder;
+    function AddSelect(const aAlias, aFieldName: string; const aAsFieldName: string = ''): IQueryBuilder;
     function AddSelectCount(const aAlias, aFieldName, aAsFieldName: string): IQueryBuilder;
     function BuildSQL: string;
     function FromTable(const aTableName, aAlias: string): IQueryBuilder;
@@ -167,7 +167,7 @@ type
     function AddOrderBy(const aOrderItem: TOrderItem): IQueryBuilder;
     function AddOrWhere(const aAlias, aFieldName: string; const a흎uality: T흎uality;
       const aParamName: string): IQueryBuilder;
-    function AddSelect(const aAlias, aFieldName: string): IQueryBuilder;
+    function AddSelect(const aAlias, aFieldName: string; const aAsFieldName: string = ''): IQueryBuilder;
     function AddSelectCount(const aAlias, aFieldName, aAsFieldName: string): IQueryBuilder;
     function BuildSQL: string;
     function FromTable(const aTableName, aAlias: string): IQueryBuilder;
@@ -425,7 +425,8 @@ begin
     sWhere := ' WHERE';
     for i := 0 to Length(FWhereItems) - 1 do
     begin
-      sClause := Format('%s %s :%s', [
+      sClause := Format('%s.%s %s :%s', [
+        FWhereItems[i].Alias,
         FieldNameToStr(FWhereItems[i]),
         흎ualityToStr(FWhereItems[i].흎uality),
         FWhereItems[i].ParamName
@@ -584,9 +585,16 @@ begin
   Result := Self;
 end;
 
-function TQueryBuilder.AddSelect(const aAlias, aFieldName: string): IQueryBuilder;
+function TQueryBuilder.AddSelect(const aAlias, aFieldName: string; const aAsFieldName: string): IQueryBuilder;
+var
+  AsFieldName: string;
 begin
-  FSelectItems := FSelectItems + [Format('%s.`%s`', [aAlias, aFieldName])];
+  if aAsFieldName.IsEmpty then
+    AsFieldName := ''
+  else
+    AsFieldName := ' AS ' + aAsFieldName;
+
+  FSelectItems := FSelectItems + [Format('%s.`%s`%s', [aAlias, aFieldName, AsFieldName])];
 
   Result := Self;
 end;
