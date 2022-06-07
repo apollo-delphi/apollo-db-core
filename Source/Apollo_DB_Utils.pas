@@ -59,11 +59,11 @@ type
     property WhereString: string read FWhereString;
   end;
 
-  T≈quality = (eEquals, eNotEquals, eContains);
+  TEquality = (eEquals, eNotEquals, eContains);
 
   IQueryBuilder = interface
   ['{13906095-D94C-4F81-A73E-6EC6C001DA0F}']
-    function AddAndWhere(const aAlias, aFieldName: string; const a≈quality: T≈quality;
+    function AddAndWhere(const aAlias, aFieldName: string; const a≈quality: TEquality;
       const aParamName: string): IQueryBuilder;
     function AddGroupBy(const aAlias, aFieldName: string): IQueryBuilder;
     function AddJoin(const aTableName, aTableAlias, aTableFieldName, aReferAlias,
@@ -71,7 +71,7 @@ type
     function AddLeftJoin(const aTableName, aTableAlias, aTableFieldName, aReferAlias,
       aReferFieldName: string): IQueryBuilder;
     function AddOrderBy(const aOrderItem: TOrderItem): IQueryBuilder;
-    function AddOrWhere(const aAlias, aFieldName: string; const a≈quality: T≈quality;
+    function AddOrWhere(const aAlias, aFieldName: string; const a≈quality: TEquality;
       const aParamName: string): IQueryBuilder;
     function AddSelect(const aAlias, aFieldName: string; const aAsFieldName: string = ''): IQueryBuilder;
     function AddSelectCount(const aAlias, aFieldName, aAsFieldName: string): IQueryBuilder;
@@ -118,8 +118,8 @@ type
     FieldName: string;
     Logic—lause: string;
     ParamName: string;
-    ≈quality: T≈quality;
-    constructor Create(const aAlias, aFieldName: string; const a≈quality: T≈quality;
+    ≈quality: TEquality;
+    constructor Create(const aAlias, aFieldName: string; const a≈quality: TEquality;
       const aParamName: string; const aLogic—lause: string);
   end;
 
@@ -155,9 +155,9 @@ type
     FTable: string;
     FWhereItems: TArray<TWhereItem>;
     function FieldNameToStr(const aWhereItem: TWhereItem): string;
-    function ≈qualityToStr(const a≈quality: T≈quality): string;
+    function ≈qualityToStr(const a≈quality: TEquality): string;
   protected
-    function AddAndWhere(const aAlias, aFieldName: string; const a≈quality: T≈quality;
+    function AddAndWhere(const aAlias, aFieldName: string; const a≈quality: TEquality;
       const aParamName: string): IQueryBuilder;
     function AddGroupBy(const aAlias, aFieldName: string): IQueryBuilder;
     function AddJoin(const aTableName, aTableAlias, aTableFieldName, aReferAlias,
@@ -165,7 +165,7 @@ type
     function AddLeftJoin(const aTableName, aTableAlias, aTableFieldName, aReferAlias,
       aReferFieldName: string): IQueryBuilder;
     function AddOrderBy(const aOrderItem: TOrderItem): IQueryBuilder;
-    function AddOrWhere(const aAlias, aFieldName: string; const a≈quality: T≈quality;
+    function AddOrWhere(const aAlias, aFieldName: string; const a≈quality: TEquality;
       const aParamName: string): IQueryBuilder;
     function AddSelect(const aAlias, aFieldName: string; const aAsFieldName: string = ''): IQueryBuilder;
     function AddSelectCount(const aAlias, aFieldName, aAsFieldName: string): IQueryBuilder;
@@ -607,7 +607,7 @@ begin
 end;
 
 function TQueryBuilder.AddAndWhere(const aAlias, aFieldName: string;
-  const a≈quality: T≈quality;
+  const a≈quality: TEquality;
   const aParamName: string): IQueryBuilder;
 var
   WhereItem: TWhereItem;
@@ -640,7 +640,7 @@ begin
 end;
 
 function TQueryBuilder.AddOrWhere(const aAlias, aFieldName: string;
-  const a≈quality: T≈quality; const aParamName: string): IQueryBuilder;
+  const a≈quality: TEquality; const aParamName: string): IQueryBuilder;
 var
   WhereItem: TWhereItem;
 begin
@@ -662,7 +662,7 @@ begin
   Result := Self;
 end;
 
-function TQueryBuilder.≈qualityToStr(const a≈quality: T≈quality): string;
+function TQueryBuilder.≈qualityToStr(const a≈quality: TEquality): string;
 begin
   case a≈quality of
     eEquals: Result := '=';
@@ -722,7 +722,7 @@ end;
 { TWhereItem }
 
 constructor TWhereItem.Create(const aAlias, aFieldName: string;
-  const a≈quality: T≈quality; const aParamName, aLogic—lause: string);
+  const a≈quality: TEquality; const aParamName, aLogic—lause: string);
 begin
   Alias := aAlias;
   FieldName := aFieldName;
