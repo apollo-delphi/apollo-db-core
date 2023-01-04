@@ -69,6 +69,9 @@ type
 
   TDBConnectParams = record
     DataBase: string;
+    Host: string;
+    Password: string;
+    UserName: string;
   end;
 
   THandleMetaDataProc = reference to procedure(aDMetaInfoQuery: TFDMetaInfoQuery);
@@ -88,17 +91,23 @@ type
     function DifferMetadataForDrop(const aTableName: string; const aFieldDefs: TArray<TFieldDef>): TArray<string>; overload;
     function DifferMetadataForDrop(const aTableName: string; const aFKeyDefs: TArray<TFKeyDef>): TArray<string>; overload;
     function DifferMetadataForDrop(const aTableName: string; const aIndexDefs: TArray<TIndexDef>): TArray<string>; overload;
+    function DoGetLastInsertedID(const aGenName: string): Integer;
+    function GetAutoicrementFieldSQL: string; virtual;
+    function GetAutoicrementTrigger(const aTableName, aFieldName: string): TStringList; virtual;
+    function GetFieldSQLDescription(var aTableDef: TTableDef; const aFieldDef: TFieldDef): string;
     procedure ForEachMetadata(const aObjectName: string; aMetaInfoKind: TFDPhysMetaInfoKind;
       aHandleMetaDataProc: THandleMetaDataProc);
     procedure SetConnectParams(aConnection: TFDConnection); virtual;
   public
     function GetCreateTableSQL(const aTableDef: TTableDef): TStringList;
-    function GetLastInsertedID: Integer;
+    function GetLastInsertedID(const aTableName: string): Integer; virtual;
     function GetModifyTableSQL(const aTableDef: TTableDef): TStringList; virtual;
+    function GetNameQuote: string; virtual;
+    function GetSQLType(const aDefaultSQLType: string): string; virtual;
     function TableExists(const aTableName: string): Boolean;
     procedure CloseConnection;
-    procedure DisableForeignKeys; virtual; abstract;
-    procedure EnableForeignKeys; virtual; abstract;
+    procedure DisableForeignKeys; virtual;
+    procedure EnableForeignKeys; virtual;
     procedure ExecQuery(aQuery: TFDQuery);
     procedure ExecSQL(const aSQLString: string);
     procedure OpenConnection;
@@ -120,9 +129,17 @@ uses
 
 { TDBEngine }
 
-function TDBEngine.GetLastInsertedID: Integer;
+procedure TDBEngine.DisableForeignKeys;
 begin
-  Result := FFDConnection.GetLastAutoGenValue('');
+end;
+
+procedure TDBEngine.EnableForeignKeys;
+begin
+end;
+
+function TDBEngine.GetLastInsertedID(const aTableName: string): Integer;
+begin
+  Result := DoGetLastInsertedID('');
 end;
 
 procedure TDBEngine.CloseConnection;
@@ -166,14 +183,10 @@ end;
 function TDBEngine.GetCreateTableSQL(const aTableDef: TTableDef): TStringList;
 var
   FieldDef: TFieldDef;
-  FKeyDef: TFKeyDef;
   i: Integer;
   IndexDef: TIndexDef;
-  sDefault: string;
-  sField: string;
   sFields: string;
-  sLength: string;
-  sNotNull: string;
+  slAutoicrementTrigger: TStringList;
   sPKey: string;
   sUnique: string;
   TableDef: TTableDef;
@@ -185,44 +198,10 @@ begin
 
   for FieldDef in TableDef.FieldDefs do
   begin
-    sPKey := '';
-    sLength := '';
-    sNotNull := '';
-    sDefault := '';
-
     if i > 0 then
     sFields := sFields + ', ';
 
-    if TableDef.PKey.FieldNames.Contains(FieldDef.FieldName) and (TableDef.PKey.FieldNames.Count = 1) then
-    begin
-      sPKey := ' PRIMARY KEY';
-      if TableDef.PKey.Autoincrement then
-        sPKey := sPKey +' AUTOINCREMENT';
-    end;
-
-    if FieldDef.FieldLength > 0 then
-      sLength := Format('(%d)', [FieldDef.FieldLength])
-    else
-    if FieldDef.FieldPrecision > 0 then
-      sLength := Format('(%d,%d)', [FieldDef.FieldPrecision, FieldDef.FieldScale]);
-
-    if FieldDef.NotNull then
-      sNotNull := ' NOT NULL';
-
-    if FieldDef.DefaultValue <> Null then
-      sDefault := Format(' DEFAULT ( ''%s'')', [VarToStr(FieldDef.DefaultValue)]);
-
-    sField := Format('`%s` %s%s%s%s%s', [FieldDef.FieldName, FieldDef.SQLType, sLength, sPKey, sNotNull, sDefault]);
-
-    if TableDef.FKeyDefs.TryGetFKeyDef(FieldDef.FieldName, {out}FKeyDef) then
-    begin
-      sField := sField + Format(' REFERENCES `%s`(%s)', [FKeyDef.ReferenceTableName, FKeyDef.ReferenceFieldName]);
-
-      if not TableDef.IndexDefs.Contains([FKeyDef.FieldName]) then
-        TableDef.IndexDefs := TableDef.IndexDefs + [FKeyDef.GetIndexDef];
-    end;
-
-    sFields := sFields + sField;
+    sFields := sFields + GetFieldSQLDescription(TableDef, FieldDef);
     Inc(i);
   end;
 
@@ -230,7 +209,15 @@ begin
   if TableDef.PKey.FieldNames.Count > 1 then
     sPKey := Format(', PRIMARY KEY(%s)', [TableDef.PKey.FieldNames.CommaText]);
 
-  Result.Add(Format('CREATE TABLE `%s` (%s%s);', [TableDef.TableName, sFields, sPKey]));
+  Result.Add(Format('CREATE TABLE %s%s%s(%s%s);',
+    [
+      GetNameQuote,
+      TableDef.TableName,
+      GetNameQuote,
+      sFields,
+      sPKey
+    ]
+  ));
 
   for IndexDef in TableDef.IndexDefs do
   begin
@@ -239,14 +226,90 @@ begin
     else
       sUnique := '';
 
-    Result.Add(Format('CREATE %sINDEX %s ON `%s`(%s);', [sUnique, IndexDef.IndexName,
-      TableDef.TableName, IndexDef.FieldNames.CommaText]));
+    Result.Add(Format('CREATE %sINDEX %s ON %s%s%s(%s);',
+      [
+        sUnique,
+        IndexDef.IndexName,
+        GetNameQuote,
+        TableDef.TableName,
+        GetNameQuote,
+        IndexDef.FieldNames.CommaText
+      ]
+    ));
+  end;
+
+  if TableDef.PKey.Autoincrement then
+  begin
+    slAutoicrementTrigger := GetAutoicrementTrigger(TableDef.TableName, TableDef.PKey.FieldNames[0]);
+    if Assigned(slAutoicrementTrigger) then
+    begin
+      Result.AddStrings(slAutoicrementTrigger);
+      slAutoicrementTrigger.Free;
+    end;
   end;
 end;
 
-function TDBEngine.GetModifyTableSQL(const aTableDef: TTableDef): TStringList;
+function TDBEngine.GetSQLType(const aDefaultSQLType: string): string;
 begin
-  Result := nil;
+  Result := aDefaultSQLType;
+end;
+
+function TDBEngine.GetModifyTableSQL(const aTableDef: TTableDef): TStringList;
+var
+  FieldDef: TFieldDef;
+  aMetaDiff: TMetaDiff;
+  TableDef: TTableDef;
+begin
+  Result := TStringList.Create;
+  TableDef := aTableDef;
+
+  for FieldDef in aTableDef.FieldDefs do
+  begin
+    aMetaDiff := DifferMetadata(aTableDef.OldTableName, FieldDef);
+
+    case aMetaDiff of
+      mdNeedToAdd: Result.Add(Format('ALTER TABLE %s%s%s ADD %s;',
+        [
+          GetNameQuote,
+          TableDef.TableName,
+          GetNameQuote,
+          GetFieldSQLDescription(TableDef, FieldDef)
+        ]
+      ));
+      {mdNeedToModify: Result.Add(Format('ALTER TABLE %s%s%s ALTER %s;',
+        [
+          GetNameQuote,
+          TableDef.TableName,
+          GetNameQuote,
+          GetFieldSQLDescription(TableDef, FieldDef)
+        ]
+      ));}
+    end;
+  end;
+
+///
+  {for FieldDef in aTableDef.FieldDefs do
+  begin
+    if DifferMetadata(aTableDef.OldTableName, FieldDef) <> mdEqual then
+      Exit(True);
+  end;
+  if Length(DifferMetadataForDrop(aTableDef.OldTableName, aTableDef.FieldDefs)) > 0 then
+    Exit(True);
+  for FKeyDef in aTableDef.FKeyDefs do
+  begin
+    if DifferMetadata(aTableDef.OldTableName, FKeyDef) <> mdEqual then
+      Exit(True);
+  end;
+  if Length(DifferMetadataForDrop(aTableDef.OldTableName, aTableDef.FKeyDefs)) > 0 then
+    Exit(True);
+  for IndexDef in aTableDef.IndexDefs do
+  begin
+    if DifferMetadata(aTableDef.OldTableName, IndexDef) <> mdEqual then
+      Exit(True);
+  end;
+
+  if Length(DifferMetadataForDrop(aTableDef.OldTableName, aTableDef.IndexDefs)) > 0 then
+    Exit(True);}
 end;
 
 function TDBEngine.GetTableNames: TArray<string>;
@@ -517,6 +580,88 @@ begin
   Result := IndexesToDrop;
 end;
 
+function TDBEngine.DoGetLastInsertedID(const aGenName: string): Integer;
+begin
+  Result := FFDConnection.GetLastAutoGenValue(aGenName);
+end;
+
+function TDBEngine.GetAutoicrementFieldSQL: string;
+begin
+  Result := ' AUTOINCREMENT';
+end;
+
+function TDBEngine.GetFieldSQLDescription(var aTableDef: TTableDef; const aFieldDef: TFieldDef): string;
+var
+  FKeyDef: TFKeyDef;
+  sDefault: string;
+  sLength: string;
+  sNotNull: string;
+  sPKey: string;
+begin
+  sPKey := '';
+  sLength := '';
+  sNotNull := '';
+  sDefault := '';
+
+  if aTableDef.PKey.FieldNames.Contains(aFieldDef.FieldName) and (aTableDef.PKey.FieldNames.Count = 1) then
+  begin
+    sPKey := ' PRIMARY KEY';
+    if aTableDef.PKey.Autoincrement then
+      sPKey := sPKey + GetAutoicrementFieldSQL;
+  end;
+
+  if aFieldDef.FieldLength > 0 then
+    sLength := Format('(%d)', [aFieldDef.FieldLength])
+  else
+
+  if aFieldDef.FieldPrecision > 0 then
+    sLength := Format('(%d,%d)', [aFieldDef.FieldPrecision, aFieldDef.FieldScale]);
+
+  if aFieldDef.NotNull then
+    sNotNull := ' NOT NULL';
+
+  if aFieldDef.DefaultValue <> Null then
+    sDefault := Format(' DEFAULT ( ''%s'')', [VarToStr(aFieldDef.DefaultValue)]);
+
+  Result := Format('%s%s%s %s%s%s%s%s',
+    [
+      GetNameQuote,
+      aFieldDef.FieldName,
+      GetNameQuote,
+      aFieldDef.SQLType,
+      sLength,
+      sPKey,
+      sNotNull,
+      sDefault
+    ]
+  );
+
+  if aTableDef.FKeyDefs.TryGetFKeyDef(aFieldDef.FieldName, {out}FKeyDef) then
+  begin
+    Result := Result + Format(' REFERENCES %s%s%s(%s)',
+      [
+        GetNameQuote,
+        FKeyDef.ReferenceTableName,
+        GetNameQuote,
+        FKeyDef.ReferenceFieldName
+      ]
+    );
+
+    if not aTableDef.IndexDefs.Contains([FKeyDef.FieldName]) then
+      aTableDef.IndexDefs := aTableDef.IndexDefs + [FKeyDef.GetIndexDef];
+  end;
+end;
+
+function TDBEngine.GetAutoicrementTrigger(const aTableName, aFieldName: string): TStringList;
+begin
+  Result := nil;
+end;
+
+function TDBEngine.GetNameQuote: string;
+begin
+  Result := '"';
+end;
+
 function TDBEngine.Connected: Boolean;
 begin
   Result := FFDConnection.Connected;
@@ -541,7 +686,10 @@ end;
 
 procedure TDBEngine.SetConnectParams(aConnection: TFDConnection);
 begin
+  aConnection.Params.Values['Host'] := FConnectParams.Host;
   aConnection.Params.Values['Database'] := FConnectParams.DataBase;
+  aConnection.Params.Values['User_Name'] := FConnectParams.UserName;
+  aConnection.Params.Values['Password'] := FConnectParams.Password;
 end;
 
 procedure TDBEngine.TransactionCommit;

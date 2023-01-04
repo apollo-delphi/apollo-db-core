@@ -225,7 +225,7 @@ begin
       if i > 0 then
         OrderPart := OrderPart + ',';
       OrderItem := aOrder.OrderItems[i];
-      OrderPart := OrderPart + Format(' `%s`', [OrderItem.FieldName]);
+      OrderPart := OrderPart + Format(' "%s"', [OrderItem.FieldName]);
       if OrderItem.Direction = odDESC then
         OrderPart := OrderPart + ' DESC';
     end;
@@ -461,9 +461,9 @@ begin
         sOrder := sOrder + ',';
       OrderItem := FOrder.OrderItems[i];
       if OrderItem.Alias.IsEmpty then
-        sOrder := sOrder + Format(' `%s`', [OrderItem.FieldName])
+        sOrder := sOrder + Format(' "%s"', [OrderItem.FieldName])
       else
-        sOrder := sOrder + Format(' %s.`%s`', [OrderItem.Alias, OrderItem.FieldName]);
+        sOrder := sOrder + Format(' %s."%s"', [OrderItem.Alias, OrderItem.FieldName]);
       if OrderItem.Direction = odDESC then
         sOrder := sOrder + ' DESC';
     end;
@@ -472,7 +472,7 @@ begin
   if FLimit > 0 then
     sLimit := ' LIMIT :LIMIT OFFSET :OFFSET';
 
-  Result := Format('SELECT%s FROM %s %s%s%s%s%s%s', [sSelect, FTable, FAlias, sJoin, sWhere, sGroupBy, sOrder, sLimit]);
+  Result := Format('SELECT%s FROM "%s" %s%s%s%s%s%s', [sSelect, FTable, FAlias, sJoin, sWhere, sGroupBy, sOrder, sLimit]);
 end;
 
 constructor TQueryBuilder.Create;
@@ -490,9 +490,9 @@ end;
 function TQueryBuilder.FieldNameToStr(const aWhereItem: TWhereItem): string;
 begin
   if aWhereItem.Åquality = eContains then
-    Result := Format('UCASE(`%s`)', [aWhereItem.FieldName])
+    Result := Format('UCASE("%s")', [aWhereItem.FieldName])
   else
-    Result := Format('`%s`', [aWhereItem.FieldName]);
+    Result := Format('"%s"', [aWhereItem.FieldName]);
 end;
 
 procedure TQueryBuilder.FillParams(aQuery: TFDQuery);
@@ -594,14 +594,20 @@ begin
   else
     AsFieldName := ' AS ' + aAsFieldName;
 
-  FSelectItems := FSelectItems + [Format('%s.`%s`%s', [aAlias, aFieldName, AsFieldName])];
+  FSelectItems := FSelectItems + [Format('%s."%s"%s',
+    [
+      aAlias,
+      aFieldName,
+      AsFieldName
+    ]
+  )];
 
   Result := Self;
 end;
 
 function TQueryBuilder.AddSelectCount(const aAlias, aFieldName, aAsFieldName: string): IQueryBuilder;
 begin
-  FSelectItems := FSelectItems + [Format('COUNT(%s.`%s`) AS %s', [aAlias, aFieldName, aAsFieldName])];
+  FSelectItems := FSelectItems + [Format('COUNT(%s."%s") AS %s', [aAlias, aFieldName, aAsFieldName])];
 
   Result := Self;
 end;
