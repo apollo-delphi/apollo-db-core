@@ -59,7 +59,7 @@ type
     property WhereString: string read FWhereString;
   end;
 
-  TEquality = (eEquals, eNotEquals, eContains);
+  TEquality = (eEquals, eNotEquals, eContains, eGreater);
 
   IQueryBuilder = interface
   ['{13906095-D94C-4F81-A73E-6EC6C001DA0F}']
@@ -673,6 +673,7 @@ begin
   case aÅquality of
     eEquals: Result := '=';
     eContains: Result := 'LIKE';
+    eGreater: Result := '>';
   else
     raise Exception.Create('TQueryBuilder.ÅqualityToStr: unknown Åquality type.');
   end;

@@ -78,11 +78,11 @@ type
 
   TDBEngine = class abstract
   private
-    FConnectParams: TDBConnectParams;
     FFDConnection: TFDConnection;
     function GetTableNames: TArray<string>;
     function Connected: Boolean;
   protected
+    FConnectParams: TDBConnectParams;
     type
       TMetaDiff = (mdEqual, mdNeedToAdd, mdNeedToModify);
     function DifferMetadata(const aTableName: string; const aFieldDef: TFieldDef): TMetaDiff; overload;
@@ -628,7 +628,7 @@ begin
       GetNameQuote,
       aFieldDef.FieldName,
       GetNameQuote,
-      aFieldDef.SQLType,
+      GetSQLType(aFieldDef.SQLType),
       sLength,
       sPKey,
       sNotNull,
@@ -638,7 +638,7 @@ begin
 
   if aTableDef.FKeyDefs.TryGetFKeyDef(aFieldDef.FieldName, {out}FKeyDef) then
   begin
-    Result := Result + Format(' REFERENCES %s%s%s(%s)',
+    Result := Result + Format(' REFERENCES %s%s%s("%s")',
       [
         GetNameQuote,
         FKeyDef.ReferenceTableName,
